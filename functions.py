@@ -5,6 +5,18 @@ from urllib.request import urlopen
 import json
 import pandas as pd
 import random
+from settings import SettingsWindow
+
+
+
+#default settings
+preferences = {
+    "difficulty": "Normal",  # or "Easy"
+    "question_limit": 5
+}
+
+settings_window = None
+
 
 #open api link to database
 with open("questions.json", "r", encoding="utf-8") as file:
@@ -39,16 +51,17 @@ def preload_data(idx):
     parameters["question"].append(question)
     parameters["correct"].append(correct)
 
-    all_answers = wrong + [correct]
-    random.shuffle(all_answers)
+    
+    random.shuffle(wrong) 
+    all_answers = [correct] + wrong
+    if preferences["difficulty"] == "Easy":
+        all_answers = all_answers[:2]
 
-    parameters["answer1"].append(all_answers[0])
-    parameters["answer2"].append(all_answers[1])
-    parameters["answer3"].append(all_answers[2])
-    parameters["answer4"].append(all_answers[3])
+    random.shuffle(all_answers)  # Shuffle the answers to randomize their order
 
-    #print correct answer to the terminal (for testing)
-    print(parameters["correct"][-1])
+    for i in range(4):
+        parameters[f"answer{i+1}"].append(all_answers[i] if i < len(all_answers) else "")
+
 
 #dictionary to store local pre-load parameters on a global level
 parameters = {
@@ -76,17 +89,29 @@ widgets = {
     "message2": []
 }
 
+#function to open settings window
+def open_settings():
+    global settings_window
+    settings_window = SettingsWindow(save_settings)
+    settings_window.show()
+
+#function to save settings
+def save_settings(difficulty, question_limit):
+    preferences["difficulty"] = "Easy" if "Easy" in difficulty else "Normal"
+    preferences["question_limit"] = question_limit
+
+
 #initialliza grid layout
 grid = QGridLayout()
 
 def clear_widgets():
     ''' hide all existing widgets and erase
         them from the global dictionary'''
-    for widget in widgets:
-        if widgets[widget] != []:
-            widgets[widget][-1].hide()
-        for i in range(0, len(widgets[widget])):
-            widgets[widget].pop()
+    for widget_list in widgets.values():
+        while widget_list:
+            widget = widget_list.pop()
+            widget.hide()
+            widget.setParent(None)  # Fully remove it from the layout
 
 def clear_parameters():
     #clear the global dictionary of parameters
@@ -133,37 +158,31 @@ def create_buttons(answer, l_margin, r_margin):
     return button
 
 def is_correct(btn):
-    #a function to evaluate wether user answer is correct
     if btn.text() == parameters["correct"][-1]:
-        # CORRECT ANSWER
+        parameters["score"][-1] += 10
 
-        #update score (+10 points)
-        temp_score = parameters["score"][-1]
-        parameters["score"].pop()
-        parameters["score"].append(temp_score + 10)
-
-        #select a new random index and replace the old one
-        parameters["index"].pop()
-        parameters["index"].append(random.randint(0,49))
-        #preload data for new index value
-        preload_data(parameters["index"][-1])
-
-        #update the text of all widgets with new data
-        widgets["score"][-1].setText(str(parameters["score"][-1]))
-        widgets["question"][0].setText(parameters["question"][-1])
-        widgets["answer1"][0].setText(parameters["answer1"][-1])
-        widgets["answer2"][0].setText(parameters["answer2"][-1])
-        widgets["answer3"][0].setText(parameters["answer3"][-1])
-        widgets["answer4"][0].setText(parameters["answer4"][-1])
-
-        if parameters["score"][-1] == 100:
-            # WON THE GAME
+        if parameters["score"][-1] >= preferences["question_limit"] * 10:
             clear_widgets()
             frame3()
+        else:
+            parameters["index"][-1] = random.randint(0, len(df) - 1)
+            preload_data(parameters["index"][-1])
+            update_game_frame()
     else:
-        # WRONG ANSWER - LOST GAME
         clear_widgets()
         frame4()
+
+def update_game_frame():
+    widgets["score"][-1].setText(str(parameters["score"][-1]))
+    widgets["question"][0].setText(parameters["question"][-1])
+    
+    answer_buttons = [widgets["answer1"][0], widgets["answer2"][0]]
+    if preferences["difficulty"] == "Normal":
+        answer_buttons += [widgets["answer3"][0], widgets["answer4"][0]]
+
+    for i, btn in enumerate(answer_buttons):
+        btn.setText(parameters[f"answer{i+1}"][-1])
+
 
 #*********************************************
 #                  FRAME 1
@@ -190,7 +209,7 @@ def frame1():
             font-size: 35px;
             color: 'white';
             padding: 25px 0;
-            margin: 100px 200px;
+            margin: 10px 20px;
         }
         *:hover{
             background: '#BC006C';
@@ -201,9 +220,31 @@ def frame1():
     button.clicked.connect(start_game)
     widgets["button"].append(button)
 
+    #settings button widget
+    settings_button = QPushButton("SETTINGS")
+    settings_button.setCursor(QCursor(QtCore.Qt.PointingHandCursor))
+    settings_button.setStyleSheet(
+        '''
+        *{
+            border: 2px solid '#BC006C';
+            border-radius: 25px;
+            font-size: 20px;
+            color: 'white';
+            padding: 10px;
+            margin: 10px;
+        }
+        *:hover{
+            background: '#BC006C';
+        }
+        '''
+    )
+    settings_button.clicked.connect(open_settings)
+    widgets["button"].append(settings_button)
+
     #place global widgets on the grid
     grid.addWidget(widgets["logo"][-1], 0, 0, 1, 2)
-    grid.addWidget(widgets["button"][-1], 1, 0, 1, 2)
+    grid.addWidget(widgets["button"][-2], 1, 0, 1, 2)
+    grid.addWidget(widgets["button"][-1], 2, 0, 1, 2)
 
 #*********************************************
 #                  FRAME 2
@@ -240,16 +281,23 @@ def frame2():
     )
     widgets["question"].append(question)
 
-    #answer button widgets
-    button1 = create_buttons(parameters["answer1"][-1], 85, 5)
-    button2 = create_buttons(parameters["answer2"][-1], 5, 85)
-    button3 = create_buttons(parameters["answer3"][-1], 85, 5)
-    button4 = create_buttons(parameters["answer4"][-1], 5, 85)
+        # Dynamically generate answer buttons based on non-empty answers
+    answer_keys = ["answer1", "answer2", "answer3", "answer4"]
+    margins = [(85, 5), (5, 85), (85, 5), (5, 85)]
+    row = 2
+    col = 0
 
-    widgets["answer1"].append(button1)
-    widgets["answer2"].append(button2)
-    widgets["answer3"].append(button3)
-    widgets["answer4"].append(button4)
+    for i, key in enumerate(answer_keys):
+        answer_text = parameters[key][-1]
+        if answer_text.strip() != "":
+            btn = create_buttons(answer_text, *margins[i])
+            widgets[key].append(btn)
+            grid.addWidget(btn, row, col)
+            if col == 1:
+                row += 1
+                col = 0
+            else:
+                col = 1
 
     #logo widget
     image = QPixmap("logo_bottom.png")
@@ -262,10 +310,6 @@ def frame2():
     #place widget on the grid
     grid.addWidget(widgets["score"][-1], 0, 1)
     grid.addWidget(widgets["question"][-1], 1, 0, 1, 2)
-    grid.addWidget(widgets["answer1"][-1], 2, 0)
-    grid.addWidget(widgets["answer2"][-1], 2, 1)
-    grid.addWidget(widgets["answer3"][-1], 3, 0)
-    grid.addWidget(widgets["answer4"][-1], 3, 1)
     grid.addWidget(widgets["logo"][-1], 4, 0, 1,2)
 
 #*********************************************
@@ -282,7 +326,8 @@ def frame3():
     widgets["message"].append(message)
 
     #score widget
-    score = QLabel("100")
+    score = QLabel()
+    score.setText(str(parameters["score"][-1]))
     score.setStyleSheet("font-size: 100px; color: #8FC740; margin: 0 75px 0px 75px;")
     widgets["score"].append(score)
 
@@ -326,6 +371,7 @@ def frame3():
 #                  FRAME 4 - FAIL
 #*********************************************
 def frame4():
+    clear_widgets()
     #sorry widget
     message = QLabel("Sorry, this answer \nwas wrong\n your score is:")
     message.setAlignment(QtCore.Qt.AlignRight)
